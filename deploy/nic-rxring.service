@@ -1,0 +1,17 @@
+[Unit]
+# Raises the VMXNET3 RX ring so bursts of RTP are not dropped at the NIC
+# before the socket buffer ever sees them. ethtool settings do not survive a
+# reboot, hence this unit. @IFACE@ is substituted by deploy/install.sh.
+Description=Raise RX ring buffer on @IFACE@ for RTP ingest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# `|| true`: ethtool exits non-zero if the value is already applied or if the
+# driver caps it below 4096. Neither is a failure worth blocking boot for.
+ExecStart=/bin/sh -c '/usr/sbin/ethtool -G @IFACE@ rx 4096 || true'
+
+[Install]
+WantedBy=multi-user.target

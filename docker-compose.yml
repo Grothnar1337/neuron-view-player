@@ -1,0 +1,27 @@
+# neuron-view-player — single service, host networking.
+#
+# host networking avoids juggling UDP port mappings for RTP in, RTSP, WebRTC
+# signalling and WebRTC media. The container therefore listens on exactly the
+# addresses in mediamtx.yml; the firewall is what controls access.
+
+services:
+  mediamtx:
+    # Pin this to a specific release once you are happy with it, e.g.
+    # bluenviron/mediamtx:1.15.1-ffmpeg — 'latest' will silently move under you.
+    # The -ffmpeg tag matters: the transcode runs inside this container.
+    image: bluenviron/mediamtx:latest-ffmpeg
+    container_name: mediamtx
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      # Bind-mounted as a single file. The admin panel rewrites this path
+      # in place (truncate + write, same inode), so the mount stays valid —
+      # do not change it to write a temp file and rename, that would break
+      # the mount until the container is recreated.
+      - ./unicats.sdp:/config/unicats.sdp:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

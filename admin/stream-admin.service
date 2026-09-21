@@ -1,0 +1,22 @@
+[Unit]
+Description=Stream admin web UI
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/stream-admin
+ExecStart=/opt/stream-admin/venv/bin/gunicorn -w 2 -b 0.0.0.0:8080 app:app
+Restart=on-failure
+RestartSec=3
+Environment=SDP_PATH=/opt/stream/unicats.sdp
+Environment=COMPOSE_DIR=/opt/stream
+Environment=COMPOSE_SERVICE=mediamtx
+Environment=MEDIAMTX_API=http://127.0.0.1:9997
+Environment=MEDIAMTX_PATH=live
+Environment=ADMIN_USER=admin
+# CHANGE THIS. deploy/install.sh rewrites it with the password you pass in.
+Environment=ADMIN_PASS=changeme
+
+[Install]
+WantedBy=multi-user.target

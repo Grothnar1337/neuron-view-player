@@ -1,0 +1,106 @@
+###############################################################################
+# MediaMTX configuration — neuron-view-player
+#
+# Takes the unicast RTP/UDP stream described by /config/unicats.sdp, transcodes
+# it 4:4:4 -> 4:2:0 with FFmpeg, republishes it to the local RTSP server, and
+# serves it as WebRTC at http://<vm-ip>:8889/live
+#
+# Only keys that differ from the MediaMTX defaults are set here; everything
+# else is left alone deliberately.
+###############################################################################
+
+logLevel: info
+logDestinations: [stdout]
+
+###############################################################################
+# API — the admin panel (admin/app.py) polls this for status.
+# Bound to loopback: the panel runs on the same VM, nothing else needs it.
+###############################################################################
+api: yes
+apiAddress: 127.0.0.1:9997
+
+metrics: no
+pprof: no
+playback: no
+
+###############################################################################
+# Servers
+###############################################################################
+
+# RTSP is the internal hop only — the FFmpeg transcode publishes to it over
+# loopback. Bound to 127.0.0.1 so it is not reachable from the LAN.
+rtsp: yes
+rtspAddress: 127.0.0.1:8554
+
+# WebRTC — this is what the browser actually consumes.
+#   TCP 8889 : WHEP signalling + the built-in player page at /<path>
+#   UDP 8189 : the media itself, direct MediaMTX <-> viewer
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+webrtcLocalUDPAddress: :8189
+webrtcIPsFromInterfaces: yes
+# If ICE advertises the wrong address (multi-homed VM, NAT), pin it here:
+# webrtcAdditionalHosts: [10.0.0.50]
+
+# HLS — fallback only, for an embedded browser with no WebRTC support.
+# 'mpegts' rather than the default 'lowLatency' because compatibility is the
+# entire point of having a fallback. Costs a few seconds of latency.
+# Set `hls: no` and drop TCP 8888 from the firewall if you never want it.
+hls: yes
+hlsAddress: :8888
+hlsVariant: mpegts
+hlsAlwaysRemux: no
+
+# Unused ingest protocols — off to keep the surface small.
+rtmp: no
+srt: no
+
+###############################################################################
+# Auth
+#   - publish / api / metrics : loopback only (that is FFmpeg and the panel)
+#   - read                    : open to the LAN, no credentials
+# The consuming product navigates straight to a URL and cannot present
+# credentials, so read has to stay anonymous. Control access at the firewall.
+###############################################################################
+authInternalUsers:
+  - user: any
+    pass: ""
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: publish
+      - action: api
+      - action: metrics
+  - user: any
+    pass: ""
+    ips: []
+    permissions:
+      - action: read
+
+###############################################################################
+# Paths
+###############################################################################
+paths:
+  live:
+    # FFmpeg is launched and supervised by MediaMTX itself, so a crash or a
+    # source dropout is restarted for us.
+    #
+    # Why each of these matters (all learned the hard way — see docs/HANDOVER.md):
+    #   -buffer_size / -reorder_queue_size : absorb UDP burst loss and reorder
+    #   -protocol_whitelist file,udp,rtp   : required for an .sdp input
+    #   -map 0:v:0                         : the SDP has a second, dead m=video
+    #                                        section; without this it stalls
+    #   -an                                : there is no audio in this stream
+    #   -pix_fmt yuv420p                   : browsers cannot decode the source's
+    #                                        4:4:4 — this transcode is mandatory
+    #   -preset fast -b:v 12M              : CPU headroom is available and the
+    #                                        4:4:4->4:2:0 squeeze is hardest on
+    #                                        sharp edges and text
+    #   -bf 0 -tune zerolatency -g 60      : low latency, 1s keyframe interval
+    runOnInit: >
+      ffmpeg -fflags +discardcorrupt -buffer_size 33554432 -reorder_queue_size 10000
+      -protocol_whitelist file,udp,rtp -i /config/unicats.sdp
+      -map 0:v:0 -an -c:v libx264 -profile:v high -preset fast -tune zerolatency
+      -bf 0 -g 60 -pix_fmt yuv420p -b:v 12M -maxrate 12M -bufsize 6M
+      -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnInitRestart: yes
