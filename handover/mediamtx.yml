@@ -1,0 +1,23 @@
+authInternalUsers:
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: publish
+      - action: api
+      - action: metrics
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: read
+
+paths:
+  live:
+    runOnInit: >
+      ffmpeg -fflags +discardcorrupt -buffer_size 33554432 -reorder_queue_size 10000
+      -protocol_whitelist file,udp,rtp -i /config/unicats.sdp
+      -map 0:v:0 -an -c:v libx264 -profile:v high -preset fast -tune zerolatency
+      -bf 0 -g 60 -pix_fmt yuv420p -b:v 12M -maxrate 12M -bufsize 6M
+      -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnInitRestart: yes

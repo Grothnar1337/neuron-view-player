@@ -1,0 +1,11 @@
+# The live SDP describes real network topology (destination IP + ports).
+# Keep it out of the repo; unicats.sdp.example is the template.
+unicats.sdp
+unicats.sdp.bak
+
+# Local secrets — the rendered systemd unit contains the admin password.
+admin/stream-admin.service.local
+
+venv/
+__pycache__/
+*.pyc

@@ -1,0 +1,17 @@
+[Unit]
+Description=Stream admin web UI
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/stream-admin
+ExecStart=/opt/stream-admin/venv/bin/gunicorn -w 2 -b 0.0.0.0:8080 app:app
+Restart=on-failure
+Environment=SDP_PATH=/opt/stream/unicats.sdp
+Environment=COMPOSE_DIR=/opt/stream
+Environment=COMPOSE_SERVICE=mediamtx
+Environment=ADMIN_USER=admin
+Environment=ADMIN_PASS=changeme
+
+[Install]
+WantedBy=multi-user.target
