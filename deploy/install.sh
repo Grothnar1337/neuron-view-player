@@ -230,12 +230,19 @@ echo "    waiting for the pipeline to come up..."
 sleep 8
 
 VM_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+# Resolve the fallbacks into plain variables here rather than using
+# ${VM_IP:-...} at each use site. A default value containing an apostrophe
+# opens a quote inside the expansion, bash never finds the closing brace, and
+# the script dies with "bad substitution" at runtime — which `bash -n` does
+# not catch, because it is an expansion error and not a syntax error.
+VM_IP_URL=${VM_IP:-<vm-ip>}
+VM_IP_TEXT=${VM_IP:-this machine}
 echo
 echo "----------------------------------------------------------------"
-echo " Player   http://${VM_IP:-<vm-ip>}:8889/live"
+echo " Player   http://${VM_IP_URL}:8889/live"
 [[ $WANT_HLS -eq 1 ]] && \
-echo " HLS      http://${VM_IP:-<vm-ip>}:8888/live   (fallback)"
-echo " Admin    http://${VM_IP:-<vm-ip>}:8080/       (user: $ADMIN_USER)"
+echo " HLS      http://${VM_IP_URL}:8888/live   (fallback)"
+echo " Admin    http://${VM_IP_URL}:8080/       (user: $ADMIN_USER)"
 if [[ ${GENERATED:-0} -eq 1 ]]; then
 echo " Password $ADMIN_PASS"
 echo "          ^ generated, shown once. Change it with:"
@@ -248,8 +255,8 @@ if [[ $PLACEHOLDER_ACTIVE -eq 1 ]]; then
 
  NEXT STEP — the placeholder SDP is in place, so there is no video yet.
  Open the admin panel above, paste the real SDP into the textarea and save.
- Set its c= line to this VM's address (${VM_IP:-the VM's IP}) and make sure
- the sender is pointed here too.
+ Set its c= line to the address of this VM ($VM_IP_TEXT) and make sure the
+ sender is pointed here too.
 EOF
   if [[ $DO_FIREWALL -eq 1 ]]; then
     PH_PORT=$(awk '/^m=video/ {print $2; exit}' "$STREAM_DIR/unicats.sdp")
