@@ -56,9 +56,32 @@ check("/save needs auth", c.post("/save", data={"sdp": "v=0\nm=video 1 x\n"}).st
 
 print("\nStatus page")
 body = c.get("/", headers=auth()).get_data(as_text=True)
-check("degrades gracefully with MediaMTX down", "unreachable" in body)
 check("shows the current SDP", "m=video 5004" in body)
 check("shows the player URL", ":8889/live" in body)
+check("has the preview element", 'id="preview"' in body)
+check("preview autoplays muted", "autoplay muted playsinline" in body)
+
+print("\nTemplate renders its JS config (Jinja did not eat the script)")
+# The script block is full of { } from JS. If Jinja mis-parsed it, these
+# substitutions would be missing or the render would have raised.
+check("WHEP port substituted", "const MTX_PORT   = 8889;" in body)
+check("path substituted", 'const MTX_PATH   = "live";' in body)
+check("no unrendered Jinja left", "{{" not in body)
+check("poll interval present", "setInterval" in body)
+
+print("\nStatus API")
+r = c.get("/api/status", headers=auth())
+check("returns 200", r.status_code == 200)
+check("is JSON", r.is_json, r.content_type)
+check("not cached", "no-store" in r.headers.get("Cache-Control", ""))
+check("needs auth", c.get("/api/status").status_code == 401)
+d = r.get_json()
+for k in ("mediamtx", "path", "readers", "bytes", "sdp_updated"):
+    check(f"has '{k}'", k in d)
+check("degrades gracefully with MediaMTX down", d["mediamtx"] == "unreachable", str(d))
+check("bytes is a number the page can subtract", isinstance(d["bytes"], (int, float)))
+check("readers is a count, not a list", isinstance(d["readers"], int))
+check("reports the SDP mtime", d["sdp_updated"] != "no file", d["sdp_updated"])
 
 print("\nSave")
 new = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=x\r\nc=IN IP4 10.0.0.99\r\nt=0 0\r\nm=video 6000 RTP/AVP 96\r\n"

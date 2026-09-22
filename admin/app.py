@@ -5,7 +5,7 @@ import datetime
 import pathlib
 from functools import wraps
 
-from flask import Flask, request, redirect, render_template_string, Response
+from flask import Flask, jsonify, request, redirect, render_template_string, Response
 import requests
 
 SDP_PATH = os.environ.get("SDP_PATH", "/opt/stream/unicats.sdp")
@@ -13,6 +13,10 @@ COMPOSE_DIR = os.environ.get("COMPOSE_DIR", "/opt/stream")
 COMPOSE_SERVICE = os.environ.get("COMPOSE_SERVICE", "mediamtx")
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997")
 MEDIAMTX_PATH = os.environ.get("MEDIAMTX_PATH", "live")
+
+# The browser reaches MediaMTX's WebRTC endpoint directly, on whatever hostname
+# the operator used to open this panel — so only the port is configured here.
+WEBRTC_PORT = int(os.environ.get("WEBRTC_PORT", "8889"))
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "changeme")
@@ -52,12 +56,14 @@ TEMPLATE = """
 <style>
   body { background:#26282c; color:#e8e6e1; font-family: -apple-system, Segoe UI, sans-serif; margin:0; padding:40px; }
   h1 { font-size:20px; font-weight:600; margin-bottom:24px; }
-  h2 { font-size:15px; font-weight:600; color:#c7c5be; margin:0 0 12px; }
+  h2 { font-size:15px; font-weight:600; color:#c7c5be; margin:0 0 12px; display:flex;
+       align-items:center; justify-content:space-between; gap:12px; }
   .card { background:#2f3136; border-radius:10px; padding:20px 24px; margin-bottom:20px; max-width:720px; }
   .status-grid { display:grid; grid-template-columns: 160px 1fr; gap:8px 16px; font-size:14px; }
   .status-grid div:nth-child(odd) { color:#9a988f; }
   .ok { color:#7fd08a; }
   .bad { color:#e2726a; }
+  .idle { color:#9a988f; }
   textarea { width:100%; min-height:220px; background:#1e2023; color:#e8e6e1; border:1px solid #44464b;
              border-radius:6px; padding:12px; font-family: Consolas, monospace; font-size:13px; box-sizing:border-box; }
   button { background:#4c8bf5; color:white; border:none; padding:10px 20px; border-radius:6px;
@@ -68,6 +74,24 @@ TEMPLATE = """
   .msg.err { background:#3a1f1f; color:#e2726a; }
   .hint { color:#79776f; font-size:12px; margin-top:8px; }
   a { color:#7fa9f0; }
+
+  /* --- preview --- */
+  .video-wrap { position:relative; background:#000; border-radius:6px; overflow:hidden;
+                aspect-ratio:16/9; width:100%; }
+  video { width:100%; height:100%; display:block; object-fit:contain; background:#000; }
+  .overlay { position:absolute; inset:0; display:grid; place-items:center; text-align:center;
+             padding:16px; background:#1a1c1f; color:#9a988f; font-size:14px; }
+  .overlay[hidden] { display:none; }
+  .overlay .big { display:block; color:#c7c5be; font-size:15px; font-weight:600; margin-bottom:4px; }
+  .pill { font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+          padding:3px 9px; border-radius:20px; background:#3a3d43; color:#9a988f; white-space:nowrap; }
+  .pill.live { background:#1f3a26; color:#8fdb9a; }
+  .pill.warn { background:#3a331f; color:#dbc78f; }
+  .pill.err  { background:#3a1f1f; color:#e2726a; }
+  .row { display:flex; align-items:center; gap:10px; }
+  .linkbtn { background:none; border:1px solid #44464b; color:#c7c5be; padding:5px 12px;
+             font-size:12px; margin:0; border-radius:5px; }
+  .linkbtn:hover { background:#3a3d43; }
 </style>
 </head>
 <body>
@@ -84,13 +108,30 @@ TEMPLATE = """
 {% endif %}
 
 <div class="card">
-  <h2>Status</h2>
+  <h2>Preview
+    <span class="row">
+      <span id="pill" class="pill">connecting</span>
+      <button type="button" id="reconnect" class="linkbtn">Reconnect</button>
+    </span>
+  </h2>
+  <div class="video-wrap">
+    <video id="preview" autoplay muted playsinline></video>
+    <div class="overlay" id="overlay"><span><span class="big" id="overlay-title">Connecting</span>
+      <span id="overlay-detail">Negotiating with MediaMTX&hellip;</span></span></div>
+  </div>
+  <div class="hint">Live, straight from MediaMTX &mdash; the video goes direct to your browser and is
+    not relayed through this page. Muted; there is no audio in this stream.</div>
+</div>
+
+<div class="card">
+  <h2>Status <span id="poll-state" class="pill">live</span></h2>
   <div class="status-grid">
-    <div>MediaMTX</div><div class="{{ 'ok' if status.mediamtx == 'running' else 'bad' }}">{{ status.mediamtx }}</div>
-    <div>Path "{{ mtx_path }}"</div><div class="{{ 'ok' if status.path == 'publishing' else 'bad' }}">{{ status.path }}</div>
-    <div>Viewers connected</div><div>{{ status.readers }}</div>
-    <div>Bytes received</div><div>{{ status.bytes }}</div>
-    <div>SDP last updated</div><div>{{ status.sdp_updated }}</div>
+    <div>MediaMTX</div><div id="s-mediamtx" class="idle">&hellip;</div>
+    <div>Path "{{ mtx_path }}"</div><div id="s-path" class="idle">&hellip;</div>
+    <div>Viewers connected</div><div id="s-readers">&hellip;</div>
+    <div>Bytes received</div><div id="s-bytes">&hellip;</div>
+    <div>Throughput</div><div id="s-rate" class="idle">measuring&hellip;</div>
+    <div>SDP last updated</div><div id="s-sdp">&hellip;</div>
     <div>Player URL</div><div><a href="{{ player_url }}">{{ player_url }}</a></div>
   </div>
 </div>
@@ -98,12 +139,193 @@ TEMPLATE = """
 <div class="card">
   <h2>Configuration</h2>
   <form method="post" action="/save">
-    <textarea name="sdp" spellcheck="false">{{ sdp }}</textarea>
+    <textarea id="sdp" name="sdp" spellcheck="false">{{ sdp }}</textarea>
     <div class="hint">Paste the full contents of the new SDP file, then save. The old file is kept as a .bak.</div>
     <button type="submit">Save &amp; restart</button>
   </form>
 </div>
 
+<script>
+const MTX_PATH   = {{ mtx_path|tojson }};
+const MTX_PORT   = {{ webrtc_port|tojson }};
+const WHEP_URL   = location.protocol + "//" + location.hostname + ":" + MTX_PORT + "/" + MTX_PATH + "/whep";
+const POLL_MS    = 3000;
+
+/* ------------------------------------------------------------------ status */
+let prevBytes = null, prevAt = null;
+
+function human(n) {
+  if (n === null || n === undefined) return "-";
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0, v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v : v.toFixed(1)) + " " + u[i];
+}
+
+function setText(id, text, cls) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  if (cls !== undefined) el.className = cls;
+}
+
+async function poll() {
+  try {
+    const r = await fetch("api/status", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    setText("poll-state", "live", "pill live");
+
+    setText("s-mediamtx", d.mediamtx, d.mediamtx === "running" ? "ok" : "bad");
+    setText("s-path", d.path, d.path === "publishing" ? "ok" : "bad");
+    setText("s-readers", d.readers);
+    setText("s-bytes", human(d.bytes) + " (" + d.bytes.toLocaleString() + ")");
+    setText("s-sdp", d.sdp_updated);
+
+    /* Rate is derived here rather than server-side: a total that is large but
+       static looks identical to a healthy stream in a single sample, and that
+       is exactly the failure worth catching. */
+    const now = Date.now();
+    if (prevBytes !== null && now > prevAt) {
+      const rate = (d.bytes - prevBytes) / ((now - prevAt) / 1000);
+      setText("s-rate", rate > 0 ? human(rate) + "/s" : "no data arriving",
+              rate > 0 ? "ok" : "bad");
+    }
+    prevBytes = d.bytes; prevAt = now;
+
+    syncPlayer(d.path === "publishing");
+  } catch (e) {
+    setText("poll-state", "no contact", "pill err");
+    setText("s-mediamtx", "admin panel unreachable", "bad");
+  }
+}
+
+/* ------------------------------------------------------------- whep player */
+let pc = null, resourceUrl = null, starting = false, wantPlaying = false;
+
+function pill(text, cls) { setText("pill", text, "pill " + cls); }
+
+function overlay(title, detail) {
+  const o = document.getElementById("overlay");
+  if (title === null) { o.hidden = true; return; }
+  o.hidden = false;
+  document.getElementById("overlay-title").textContent = title;
+  document.getElementById("overlay-detail").textContent = detail || "";
+}
+
+function iceComplete(conn) {
+  /* MediaMTX accepts a trickle-less offer, which avoids implementing the WHEP
+     PATCH flow. On a LAN with no STUN this gathers host candidates in ms; the
+     timeout is only a guard against a gathering state that never settles. */
+  if (conn.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(t); conn.removeEventListener("icegatheringstatechange", check); resolve(); };
+    const check = () => { if (conn.iceGatheringState === "complete") done(); };
+    const t = setTimeout(done, 3000);
+    conn.addEventListener("icegatheringstatechange", check);
+  });
+}
+
+async function startPlayer() {
+  if (starting || pc) return;
+  starting = true;
+  pill("connecting", "warn");
+  overlay("Connecting", "Negotiating with MediaMTX…");
+  try {
+    pc = new RTCPeerConnection({ iceServers: [] });
+    pc.addTransceiver("video", { direction: "recvonly" });
+
+    pc.ontrack = (e) => {
+      document.getElementById("preview").srcObject = e.streams[0];
+      overlay(null);
+      pill("live", "live");
+    };
+    pc.onconnectionstatechange = () => {
+      if (!pc) return;
+      const s = pc.connectionState;
+      if (s === "failed" || s === "disconnected" || s === "closed") {
+        pill("dropped", "err");
+        overlay("Connection lost", "Retrying…");
+        stopPlayer();
+        if (wantPlaying) setTimeout(() => { if (wantPlaying) startPlayer(); }, 2000);
+      }
+    };
+
+    await pc.setLocalDescription(await pc.createOffer());
+    await iceComplete(pc);
+
+    const res = await fetch(WHEP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/sdp" },
+      body: pc.localDescription.sdp,
+    });
+    if (!res.ok) throw new Error("WHEP returned " + res.status);
+
+    /* MediaMTX does expose Location through CORS (verified against 1.x), so
+       the DELETE on teardown normally works and frees the session at once.
+       Guarded anyway: if a future version stops exposing it, the read returns
+       null cross-origin, and closing the peer connection still drops the
+       session — MediaMTX just reaps it on ICE timeout rather than instantly. */
+    const loc = res.headers.get("Location");
+    if (loc) resourceUrl = new URL(loc, WHEP_URL).href;
+
+    await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+  } catch (err) {
+    pill("failed", "err");
+    overlay("Could not connect", String(err && err.message ? err.message : err));
+    stopPlayer();
+    if (wantPlaying) setTimeout(() => { if (wantPlaying) startPlayer(); }, 4000);
+  } finally {
+    starting = false;
+  }
+}
+
+function stopPlayer() {
+  if (resourceUrl) {
+    fetch(resourceUrl, { method: "DELETE" }).catch(() => {});
+    resourceUrl = null;
+  }
+  if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+  const v = document.getElementById("preview");
+  if (v) v.srcObject = null;
+}
+
+function syncPlayer(publishing) {
+  wantPlaying = publishing;
+  if (publishing) {
+    if (!pc && !starting) startPlayer();
+  } else if (pc || starting) {
+    stopPlayer();
+    pill("no signal", "");
+    overlay("No signal", "The path is not publishing. The preview starts on its own when it is.");
+  } else {
+    pill("no signal", "");
+    overlay("No signal", "The path is not publishing. The preview starts on its own when it is.");
+  }
+}
+
+/* --------------------------------------------------------------- lifecycle */
+document.getElementById("reconnect").addEventListener("click", () => {
+  stopPlayer();
+  if (wantPlaying) startPlayer();
+});
+
+/* A hidden tab does not need a 12 Mbit/s video feed or a status poll. */
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopPlayer();
+    pill("paused", "");
+    overlay("Paused", "Preview stops while this tab is in the background.");
+  } else {
+    prevBytes = null;
+    poll();
+  }
+});
+
+window.addEventListener("pagehide", stopPlayer);
+
+poll();
+setInterval(() => { if (!document.hidden) poll(); }, POLL_MS);
+</script>
 </body>
 </html>
 """
@@ -143,7 +365,7 @@ def get_status():
 
 def player_url():
     host = (request.host or "").split(":")[0]
-    return f"http://{host}:8889/{MEDIAMTX_PATH}"
+    return f"http://{host}:{WEBRTC_PORT}/{MEDIAMTX_PATH}"
 
 
 @app.route("/", methods=["GET"])
@@ -154,12 +376,22 @@ def index():
         sdp_content = open(SDP_PATH).read()
     return render_template_string(
         TEMPLATE,
-        status=get_status(),
         sdp=sdp_content,
         saved=request.args.get("saved"),
         mtx_path=MEDIAMTX_PATH,
+        webrtc_port=WEBRTC_PORT,
         player_url=player_url(),
     )
+
+
+@app.route("/api/status", methods=["GET"])
+@requires_auth
+def api_status():
+    """Polled by the page every few seconds so the status can update without a
+    reload — a reload would tear down the preview's WebRTC connection."""
+    resp = jsonify(get_status())
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.route("/healthz", methods=["GET"])
@@ -172,7 +404,7 @@ def healthz():
 @requires_auth
 def save():
     # Browsers submit textarea content with CRLF line endings regardless of
-    # what was pasted in, so normalise before writing.
+    # what was pasted, so normalise before writing.
     new_sdp = request.form.get("sdp", "").replace("\r\n", "\n").replace("\r", "\n")
     new_sdp = new_sdp.strip() + "\n"
 

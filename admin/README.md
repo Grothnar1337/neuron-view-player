@@ -58,11 +58,48 @@ override alone.
 
 ## Endpoints
 
-| Path       | Auth | Purpose                                   |
-|------------|------|-------------------------------------------|
-| `/`        | yes  | Status + SDP editor                        |
-| `/save`    | yes  | Writes the SDP, restarts MediaMTX          |
-| `/healthz` | no   | Liveness for monitoring; returns `ok`      |
+| Path          | Auth | Purpose                                     |
+|---------------|------|---------------------------------------------|
+| `/`           | yes  | Preview, status and the SDP editor           |
+| `/api/status` | yes  | JSON status, polled by the page every 3s     |
+| `/save`       | yes  | Writes the SDP, restarts MediaMTX            |
+| `/healthz`    | no   | Liveness for monitoring; returns `ok`        |
+
+## The preview player
+
+The page embeds a live preview so you can see the picture without opening a
+separate tab. It matters more than it sounds: the status readout alone cannot
+distinguish a healthy stream from one that is flowing but visibly broken —
+during one incident every field read green while the picture was tearing badly.
+
+**It costs the server almost nothing.** The transcode runs once regardless of
+viewer count; a viewer only costs MediaMTX packetise-and-send, a few percent of
+a core. The decode happens in your browser. Deliberately *not* done: a separate
+low-resolution preview encode, which would be a second x264 instance and is the
+one version of this feature that would need a bigger VM.
+
+How it works:
+
+- The page speaks **WHEP** directly to MediaMTX on `:8889`, using the same
+  hostname you opened the panel with. Media flows browser↔MediaMTX over UDP
+  8189 and is never relayed through this Flask app.
+- MediaMTX answers the CORS preflight from the panel's origin, so this needs no
+  MediaMTX configuration. `WEBRTC_PORT` (default 8889) is the only knob.
+- The offer is sent **after ICE gathering completes**, which avoids
+  implementing WHEP's PATCH trickle flow. On a LAN with no STUN that is
+  instant.
+- The player starts and stops itself from the polled status: it connects when
+  the path reports `publishing`, tears down and shows "No signal" when it does
+  not, and retries on a dropped connection.
+- It stops while the tab is in the background — no point pulling 12 Mbit/s into
+  a hidden tab — and resumes when you come back.
+
+**Why status is polled rather than rendered:** a full page reload would tear
+down the WebRTC connection every few seconds. `/api/status` returns the same
+data the template used to render server-side, and the page updates the fields
+in place. The throughput figure is derived in the browser from consecutive
+samples, because a large but static byte total looks identical to a healthy
+stream in any single sample — which is exactly the failure worth catching.
 
 ## Tests
 
