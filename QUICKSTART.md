@@ -29,27 +29,35 @@ In Neuron View, set the unicast stream destination to **`10.144.40.160`**.
 
 ## 2. Load the SDP
 
-Neuron View gives you an SDP file describing the stream. Whenever it changes —
-new stream, different port, different codec settings — load it here.
+Neuron View gives you an SDP describing the stream. Copy it straight out —
+**it works as-is, no editing needed.** Load it here whenever it changes: new
+stream, different port, different settings.
 
 1. Open **http://10.144.40.160:8080/** and log in.
-2. Copy the **whole** SDP from Neuron View into the big text box, replacing
-   what's there.
-3. **Change the `c=` line to `c=IN IP4 10.144.40.160`.**
-4. Click **Save & restart**.
-5. Wait about 10 seconds, then refresh the page.
-
-> ### The `c=` line is the one that catches everybody
->
-> Neuron View writes its own address into the SDP. It has to be **this
-> server's** address instead, because that line tells the server which
-> interface to listen on.
->
-> Get it wrong and there is **no error message** — the admin panel just sits
-> at "not publishing" with zero bytes, looking like the stream never arrived.
+2. Paste the **whole** SDP into the big text box, replacing what's there.
+3. Click **Save & restart**.
+4. Wait about 10 seconds, then refresh the page.
 
 The previous SDP is saved automatically as a backup, so a bad paste is not
 a disaster.
+
+> ### Worth one glance: the `c=` line
+>
+> Neuron View writes the *destination* into `c=`, so as long as the stream's
+> destination is set to this server, it comes out correct on its own:
+>
+> ```
+> c=IN IP4 10.144.40.160/32
+> ```
+>
+> If it shows any other address, the destination is wrong **in Neuron View** —
+> fix it there and copy the SDP again. Don't hand-edit this line: that would
+> paper over a sender still pointed somewhere else, and no video would arrive
+> regardless.
+>
+> Worth checking because it fails **silently**. The panel just sits at "not
+> publishing" with zero bytes, looking exactly like a stream that never
+> arrived.
 
 ## 3. Check it's working
 
@@ -90,7 +98,7 @@ several seconds behind.
 | Symptom | Most likely cause |
 |---|---|
 | Page loads, video is black | The stream's codec settings changed at source. Escalate. |
-| "not publishing", bytes at 0 | The `c=` line isn't `10.144.40.160`, or Neuron View isn't sending here |
+| "not publishing", bytes at 0 | Neuron View isn't sending here — check its destination, then re-copy the SDP |
 | Bytes stuck at a non-zero number | Neuron View stopped sending, or something else grabbed the port |
 | Was working, now nothing | Check nobody opened VLC against the stream |
 | Picture tears or breaks up | Note the time and escalate — don't change settings |

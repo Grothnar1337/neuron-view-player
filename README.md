@@ -67,9 +67,55 @@ SDP (backing it up if it changed), and keeps the existing admin password.
 ### The SDP
 
 `unicats.sdp` is **not in the repo** — it holds real network topology and it is
-per-VM. Copy the working one from the current VM, and make sure its `c=` line
-is the address of the VM you are deploying to. `unicats.sdp.example` shows the
-expected shape.
+per-VM. Copy it straight out of the Neuron View interface. It works **as-is**;
+it does not need editing.
+
+`unicats.sdp.example` in this repo is a minimal illustrative stub. What Neuron
+View actually emits looks like this (addresses changed):
+
+```
+v=0
+o=- 3008501142 3999023993 IN IP4 10.0.0.9
+s=Compressed Output 2
+t=0 0
+m=video 5100 RTP/AVP 98
+c=IN IP4 10.0.0.50/32
+b=AS:10500
+a=source-filter: incl IN IP4 10.0.0.50 10.0.0.9
+a=rtpmap:98 H264/90000
+a=fmtp:98 width=1920; height=1080; exactframerate=60000/1001; colorimetry=BT709; TCS=SDR; profile-level-id=F4003E; packetization-mode=1; max-br=10000;
+```
+
+Reading one of these:
+
+- **`o=`** carries the *sender's* address, **`c=`** the *destination*. Neuron
+  View writes the destination it is configured with, so a correctly configured
+  sender produces a correct `c=` on its own — it does not need hand-editing.
+  If `c=` is not this VM, fix the destination in Neuron View rather than the
+  file, or you have a sender still pointed elsewhere.
+- **`a=source-filter: incl IN IP4 <dest> <source>`** names the source address,
+  which is what `deploy/firewall.sh --source-ip` wants.
+- **`m=video <port>`** is the RTP ingest port the firewall rule needs. Note it
+  is media-level here — the `c=` line sits *inside* the `m=` section, after it,
+  not at session level above it. Both are valid SDP.
+- **`b=AS:`** is the source bitrate in kbit/s. Useful context when judging
+  quality — see the encoder notes in `docs/RUNBOOK.md`.
+- **`profile-level-id=F4003E`** decodes to profile_idc 244, which is
+  High 4:4:4 Predictive. That is the byte that makes the transcode mandatory.
+- **`exactframerate=60000/1001`** is 59.94, not 60.
+
+Some Neuron View configurations emit **two `m=video` sections** with only the
+first carrying data; others emit one. `-map 0:v:0` in `mediamtx.yml` handles
+both and must stay.
+
+> **Known rough edge.** `install.sh`'s `c=` sanity check compares the address
+> with its `/32` prefix still attached against `ip addr` output, which shows
+> the interface's own prefix (`/24` or whatever). So a perfectly correct
+> Neuron View SDP makes it print `WARNING: the SDP's c= address … is not an
+> address on this VM`. The warning is cosmetic — nothing else reads that value
+> and the install proceeds — but it is wrong and will mislead. The fix is one
+> `cut -d/ -f1` on that line; left alone deliberately rather than changing
+> deploy code during a docs update.
 
 `install.sh` refuses to start without it, on purpose: Docker would create a
 *directory* at the bind-mount path and the failure would look like an FFmpeg
