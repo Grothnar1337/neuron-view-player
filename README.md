@@ -12,6 +12,10 @@ RTP/UDP source → FFmpeg (transcode 4:4:4 → 4:2:0) → RTSP → MediaMTX → 
 
 Viewers open `http://<vm-ip>:8889/live` — MediaMTX's own bare player page.
 
+> **Using it rather than deploying it?** [QUICKSTART.md](QUICKSTART.md) is the
+> operator guide: point Neuron View at the server, load the SDP, check it's
+> running. This README is about how the thing is built and deployed.
+
 ## The three things that make this non-obvious
 
 1. **The transcode is mandatory.** The source is 1080p60 H.264 **High 4:4:4
