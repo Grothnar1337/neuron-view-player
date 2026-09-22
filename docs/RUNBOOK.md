@@ -85,14 +85,66 @@ There is no audio in this source. `-an` must be present.
 Normal. FFmpeg joined mid-stream and is waiting for the next keyframe. It
 clears on its own within about a second.
 
-### `RTP: missed N packets`
+### `RTP: missed N packets`, or the picture tears / smears
 
-Real UDP loss, not a bug. A few per hour is fine. If it is constant:
+**Find out whether the packets reached the VM before blaming the network.**
+That one check decides everything:
 
-1. Network path first — wired, same VLAN as the source, no wireless hop.
-2. Then buffers: confirm `net.core.rmem_max` is 134217728 (`sysctl -n
-   net.core.rmem_max`) and the NIC RX ring is 4096 (`ethtool -g <iface>`).
-3. Do **not** start editing FFmpeg flags. That is not where this is fixed.
+```bash
+ip -s link show <iface>          # NIC-level
+netstat -su | grep -iE "receive buffer errors|packet receive errors"
+```
+
+- **NIC shows `dropped`/`errors`/`missed` climbing** → genuine wire loss.
+  Network path first: wired, same VLAN as the source, no wireless hop. Then
+  confirm `net.core.rmem_max` is 134217728 and the RX ring is 4096
+  (`ethtool -g <iface>`). Do not start editing FFmpeg flags.
+
+- **NIC clean but `receive buffer errors` climbing** → the packets arrived
+  and the receiver was too slow to read them. This is a *local* problem and
+  the network is fine. See below.
+
+The loss pattern tells you which too: genuine wire loss is a steady trickle
+of small numbers. Bursts of thousands at a time are a receiver stall.
+
+#### Receiver-side stalls
+
+This bit the first deployment. Two causes, both now fixed in `mediamtx.yml`,
+recorded here because the instinct is to "fix" them in the wrong direction:
+
+1. **`-reorder_queue_size` set too high.** On a lost packet the RTP demuxer
+   holds every packet behind it until the queue fills. At 10000 that is
+   seconds of stalled reading, long enough to overflow the socket buffer and
+   lose thousands more packets — which stalls it again. It looks exactly like
+   catastrophic network loss. 500 is FFmpeg's default and is right for a LAN
+   unicast feed. **Raising this to absorb loss causes loss.**
+
+2. **The encoder starving the reader.** Check with `top`:
+
+   ```bash
+   top -bn1 | grep ffmpeg
+   ```
+
+   If ffmpeg is at several hundred percent *and* the box still shows idle CPU,
+   x264 cannot use the cores it has. `-tune zerolatency` forces
+   `--sliced-threads`, which scales far worse than frame threading. Levers in
+   order of increasing latency cost:
+
+   - `-preset veryfast` (or `superfast`) — no latency cost
+   - `-thread_queue_size 4096` — lets the demuxer drain while the encoder works
+   - drop `-tune zerolatency` — regains frame threading, adds ~100-150ms
+   - lower `-b:v` — smallest CPU effect of the four
+
+Confirm the socket buffer is actually the size you think:
+
+```bash
+sudo ss -lunpm | grep -A1 ffmpeg
+```
+
+`rb` in the `skmem:` line is the receive buffer in bytes; expect ~33554432.
+
+The counters are cumulative, so to measure a change: note the number, restart,
+wait a few minutes, and compare the delta — not the absolute value.
 
 ### Page loads, connection never establishes
 

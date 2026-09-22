@@ -86,21 +86,44 @@ paths:
     # source dropout is restarted for us.
     #
     # Why each of these matters (all learned the hard way — see docs/HANDOVER.md):
-    #   -buffer_size / -reorder_queue_size : absorb UDP burst loss and reorder
     #   -protocol_whitelist file,udp,rtp   : required for an .sdp input
     #   -map 0:v:0                         : the SDP has a second, dead m=video
     #                                        section; without this it stalls
     #   -an                                : there is no audio in this stream
     #   -pix_fmt yuv420p                   : browsers cannot decode the source's
     #                                        4:4:4 — this transcode is mandatory
-    #   -preset fast -b:v 12M              : CPU headroom is available and the
-    #                                        4:4:4->4:2:0 squeeze is hardest on
-    #                                        sharp edges and text
-    #   -bf 0 -tune zerolatency -g 60      : low latency, 1s keyframe interval
+    #   -b:v 12M                           : the 4:4:4->4:2:0 squeeze is hardest
+    #                                        on sharp edges and text
+    #   -bf 0 -g 60                        : no reordering delay, 1s keyframes
+    #
+    # Ingest tuning. The first deployment tore badly, and the cause was NOT the
+    # network: `ip -s link` showed zero NIC drops while every one of ~186k UDP
+    # errors was a *receive buffer* error. The packets arrived and FFmpeg was
+    # too slow to read them. Two causes, both fixed here:
+    #
+    #   -reorder_queue_size 500  : was 10000. On a lost packet the RTP demuxer
+    #       holds everything behind it until the queue fills, so 10000 packets
+    #       is seconds of stalled reading — long enough to overflow the socket,
+    #       losing thousands more and starting the cycle again. That produced
+    #       bursts of 3000-7000 lost packets rather than the steady trickle of
+    #       genuine wire loss. 500 is FFmpeg's own default; this is a LAN
+    #       unicast feed, so real reordering is rare and a deep queue buys
+    #       nothing. Do not raise this to "absorb loss" — it causes it.
+    #
+    #   -thread_queue_size 4096  : lets the demuxer keep draining the socket
+    #       while the encoder is busy, instead of stalling in lockstep with it.
+    #
+    #   -preset veryfast (was fast) : ffmpeg was at 518% CPU with 34% of the
+    #       box idle. `-tune zerolatency` forces x264 to --sliced-threads,
+    #       which scales much worse than frame threading, so it could not use
+    #       the cores it had and back-pressured the reader. If loss persists,
+    #       the next lever is dropping -tune zerolatency to regain frame
+    #       threading, at the cost of ~100-150ms of latency.
     runOnInit: >
-      ffmpeg -fflags +discardcorrupt -buffer_size 33554432 -reorder_queue_size 10000
+      ffmpeg -fflags +discardcorrupt -buffer_size 33554432 -reorder_queue_size 500
+      -thread_queue_size 4096
       -protocol_whitelist file,udp,rtp -i /config/unicats.sdp
-      -map 0:v:0 -an -c:v libx264 -profile:v high -preset fast -tune zerolatency
+      -map 0:v:0 -an -c:v libx264 -profile:v high -preset veryfast -tune zerolatency
       -bf 0 -g 60 -pix_fmt yuv420p -b:v 12M -maxrate 12M -bufsize 6M
       -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
     runOnInitRestart: yes
