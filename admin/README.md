@@ -65,6 +65,17 @@ override alone.
 | `/save`       | yes  | Writes the SDP, restarts MediaMTX            |
 | `/healthz`    | no   | Liveness for monitoring; returns `ok`        |
 
+## Layout
+
+Fluid, capped at 1700px. Above 1100px it is two columns — status and the SDP
+editor on the left, preview on the right, where the preview sticks so it stays
+in view while the SDP box is scrolled. Below 1100px it stacks with the
+**preview first**, since that is what you glance at.
+
+Between 620 and 1099px the preview is capped at 640px wide: full-bleed 16:9 at
+that width is around 500px tall and pushes the status off screen. On a phone it
+goes full width again.
+
 ## The preview player
 
 The page embeds a live preview so you can see the picture without opening a

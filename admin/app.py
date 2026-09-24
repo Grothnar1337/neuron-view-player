@@ -54,22 +54,48 @@ TEMPLATE = """
 <meta charset="utf-8">
 <title>Stream admin</title>
 <style>
-  body { background:#26282c; color:#e8e6e1; font-family: -apple-system, Segoe UI, sans-serif; margin:0; padding:40px; }
-  h1 { font-size:20px; font-weight:600; margin-bottom:24px; }
+  :root { --pad: clamp(16px, 2.4vw, 40px); --gap: clamp(14px, 1.5vw, 22px); }
+  * { box-sizing: border-box; }
+  body { background:#26282c; color:#e8e6e1; font-family: -apple-system, Segoe UI, sans-serif;
+         margin:0; padding: var(--pad); }
+  .page { max-width:1700px; margin:0 auto; }
+  h1 { font-size: clamp(18px, 1.5vw, 22px); font-weight:600; margin:0 0 var(--gap); }
   h2 { font-size:15px; font-weight:600; color:#c7c5be; margin:0 0 12px; display:flex;
-       align-items:center; justify-content:space-between; gap:12px; }
-  .card { background:#2f3136; border-radius:10px; padding:20px 24px; margin-bottom:20px; max-width:720px; }
-  .status-grid { display:grid; grid-template-columns: 160px 1fr; gap:8px 16px; font-size:14px; }
+       align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .card { background:#2f3136; border-radius:10px; padding: clamp(14px, 1.3vw, 22px) clamp(16px, 1.5vw, 24px); }
+
+  /* Two columns on a wide screen, preview on the right. The preview sticks so
+     it stays in view while the SDP box is scrolled. */
+  .layout { display:grid; gap: var(--gap); align-items:start;
+            grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+  .col { display:flex; flex-direction:column; gap: var(--gap); min-width:0; }
+  @media (min-width: 1100px) { .col-side { position:sticky; top: var(--pad); } }
+  /* Below that it stacks — preview first, since it is the thing you glance at. */
+  @media (max-width: 1099px) {
+    .layout { grid-template-columns: 1fr; }
+    .col-side { order:-1; }
+  }
+  /* Stacked on a mid-width window, a full-bleed 16:9 preview is ~500px tall and
+     pushes the status out of view. Cap it so both are on screen at once; on a
+     phone it goes full width again, where there is no room to spare anyway. */
+  @media (min-width: 620px) and (max-width: 1099px) {
+    .video-wrap { max-width:640px; }
+  }
+
+  .status-grid { display:grid; grid-template-columns: minmax(100px, 150px) minmax(0, 1fr);
+                 gap:8px 16px; font-size:14px; }
+  .status-grid > div { overflow-wrap:anywhere; }
   .status-grid div:nth-child(odd) { color:#9a988f; }
   .ok { color:#7fd08a; }
   .bad { color:#e2726a; }
   .idle { color:#9a988f; }
-  textarea { width:100%; min-height:220px; background:#1e2023; color:#e8e6e1; border:1px solid #44464b;
-             border-radius:6px; padding:12px; font-family: Consolas, monospace; font-size:13px; box-sizing:border-box; }
+  textarea { width:100%; min-height: clamp(180px, 26vh, 340px); background:#1e2023; color:#e8e6e1;
+             border:1px solid #44464b; border-radius:6px; padding:12px;
+             font-family: Consolas, monospace; font-size:13px; resize:vertical; }
   button { background:#4c8bf5; color:white; border:none; padding:10px 20px; border-radius:6px;
            font-size:14px; cursor:pointer; margin-top:12px; }
   button:hover { background:#3b78e0; }
-  .msg { padding:10px 14px; border-radius:6px; margin-bottom:16px; font-size:14px; max-width:720px; }
+  .msg { padding:10px 14px; border-radius:6px; margin-bottom: var(--gap); font-size:14px; }
   .msg.ok { background:#1f3a26; color:#8fdb9a; }
   .msg.err { background:#3a1f1f; color:#e2726a; }
   .hint { color:#79776f; font-size:12px; margin-top:8px; }
@@ -95,6 +121,7 @@ TEMPLATE = """
 </style>
 </head>
 <body>
+<div class="page">
 <h1>Stream admin</h1>
 
 {% if saved == "1" %}
@@ -107,42 +134,50 @@ TEMPLATE = """
   <code>cd /opt/stream &amp;&amp; docker compose restart mediamtx</code></div>
 {% endif %}
 
-<div class="card">
-  <h2>Preview
-    <span class="row">
-      <span id="pill" class="pill">connecting</span>
-      <button type="button" id="reconnect" class="linkbtn">Reconnect</button>
-    </span>
-  </h2>
-  <div class="video-wrap">
-    <video id="preview" autoplay muted playsinline></video>
-    <div class="overlay" id="overlay"><span><span class="big" id="overlay-title">Connecting</span>
-      <span id="overlay-detail">Negotiating with MediaMTX&hellip;</span></span></div>
-  </div>
-  <div class="hint">Live, straight from MediaMTX &mdash; the video goes direct to your browser and is
-    not relayed through this page. Muted; there is no audio in this stream.</div>
-</div>
+<div class="layout">
 
-<div class="card">
-  <h2>Status <span id="poll-state" class="pill">live</span></h2>
-  <div class="status-grid">
-    <div>MediaMTX</div><div id="s-mediamtx" class="idle">&hellip;</div>
-    <div>Path "{{ mtx_path }}"</div><div id="s-path" class="idle">&hellip;</div>
-    <div>Viewers connected</div><div id="s-readers">&hellip;</div>
-    <div>Bytes received</div><div id="s-bytes">&hellip;</div>
-    <div>Throughput</div><div id="s-rate" class="idle">measuring&hellip;</div>
-    <div>SDP last updated</div><div id="s-sdp">&hellip;</div>
-    <div>Player URL</div><div><a href="{{ player_url }}">{{ player_url }}</a></div>
-  </div>
-</div>
+  <div class="col col-main">
+    <div class="card">
+      <h2>Status <span id="poll-state" class="pill">live</span></h2>
+      <div class="status-grid">
+        <div>MediaMTX</div><div id="s-mediamtx" class="idle">&hellip;</div>
+        <div>Path "{{ mtx_path }}"</div><div id="s-path" class="idle">&hellip;</div>
+        <div>Viewers connected</div><div id="s-readers">&hellip;</div>
+        <div>Bytes received</div><div id="s-bytes">&hellip;</div>
+        <div>Throughput</div><div id="s-rate" class="idle">measuring&hellip;</div>
+        <div>SDP last updated</div><div id="s-sdp">&hellip;</div>
+        <div>Player URL</div><div><a href="{{ player_url }}">{{ player_url }}</a></div>
+      </div>
+    </div>
 
-<div class="card">
-  <h2>Configuration</h2>
-  <form method="post" action="/save">
-    <textarea id="sdp" name="sdp" spellcheck="false">{{ sdp }}</textarea>
-    <div class="hint">Paste the full contents of the new SDP file, then save. The old file is kept as a .bak.</div>
-    <button type="submit">Save &amp; restart</button>
-  </form>
+    <div class="card">
+      <h2>Configuration</h2>
+      <form method="post" action="/save">
+        <textarea id="sdp" name="sdp" spellcheck="false">{{ sdp }}</textarea>
+        <div class="hint">Paste the full contents of the new SDP file, then save. The old file is kept as a .bak.</div>
+        <button type="submit">Save &amp; restart</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col col-side">
+    <div class="card">
+      <h2>Preview
+        <span class="row">
+          <span id="pill" class="pill">connecting</span>
+          <button type="button" id="reconnect" class="linkbtn">Reconnect</button>
+        </span>
+      </h2>
+      <div class="video-wrap">
+        <video id="preview" autoplay muted playsinline></video>
+        <div class="overlay" id="overlay"><span><span class="big" id="overlay-title">Connecting</span>
+          <span id="overlay-detail">Negotiating with MediaMTX&hellip;</span></span></div>
+      </div>
+      <div class="hint">Live, straight from MediaMTX &mdash; the video goes direct to your browser and is
+        not relayed through this page. Muted; there is no audio in this stream.</div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -326,6 +361,7 @@ window.addEventListener("pagehide", stopPlayer);
 poll();
 setInterval(() => { if (!document.hidden) poll(); }, POLL_MS);
 </script>
+</div>
 </body>
 </html>
 """
