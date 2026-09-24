@@ -1,5 +1,6 @@
 import os
 import hmac
+import ipaddress
 import subprocess
 import datetime
 import pathlib
@@ -127,7 +128,9 @@ TEMPLATE = """
 {% if saved == "1" %}
 <div class="msg ok">Saved. MediaMTX is restarting the pipeline now, give it a few seconds.</div>
 {% elif saved == "error" %}
-<div class="msg err">That doesn't look like a valid SDP file (expected it to start with "v="). Nothing was changed.</div>
+<div class="msg err">That doesn't look like a usable SDP. It needs to start with "v=", have an
+  <code>m=video</code> line with a port, and an IPv4 <code>c=</code> line (unicast address or
+  multicast group). Nothing was changed.</div>
 {% elif saved == "norestart" %}
 <div class="msg err">The SDP was saved, but the restart failed &mdash; couldn't run
   <code>docker compose restart</code>. Restart it by hand:
@@ -142,6 +145,7 @@ TEMPLATE = """
       <div class="status-grid">
         <div>MediaMTX</div><div id="s-mediamtx" class="idle">&hellip;</div>
         <div>Path "{{ mtx_path }}"</div><div id="s-path" class="idle">&hellip;</div>
+        <div>Source</div><div id="s-source" class="idle">&hellip;</div>
         <div>Viewers connected</div><div id="s-readers">&hellip;</div>
         <div>Bytes received</div><div id="s-bytes">&hellip;</div>
         <div>Throughput</div><div id="s-rate" class="idle">measuring&hellip;</div>
@@ -154,7 +158,8 @@ TEMPLATE = """
       <h2>Configuration</h2>
       <form method="post" action="/save">
         <textarea id="sdp" name="sdp" spellcheck="false">{{ sdp }}</textarea>
-        <div class="hint">Paste the full contents of the new SDP file, then save. The old file is kept as a .bak.</div>
+        <div class="hint">Paste the full contents of the new SDP file, then save. Unicast or multicast,
+          any port &mdash; nothing else needs changing. The old file is kept as a .bak.</div>
         <button type="submit">Save &amp; restart</button>
       </form>
     </div>
@@ -215,6 +220,8 @@ async function poll() {
     setText("s-readers", d.readers);
     setText("s-bytes", human(d.bytes) + " (" + d.bytes.toLocaleString() + ")");
     setText("s-sdp", d.sdp_updated);
+    setText("s-source", d.source, d.source_warning ? "bad" : "");
+    if (d.source_warning) document.getElementById("s-source").title = d.source_warning;
 
     /* Rate is derived here rather than server-side: a total that is large but
        static looks identical to a healthy stream in a single sample, and that
@@ -367,6 +374,62 @@ setInterval(() => { if (!document.hidden) poll(); }, POLL_MS);
 """
 
 
+def parse_sdp(text):
+    """Pull out what decides how the stream is received: the first m=video port
+    and the first IPv4 c= address. Neuron View puts c= inside the m= section
+    (media level) and suffixes it, e.g. 10.0.0.50/32 or 239.1.1.1/16 (TTL), so
+    the suffix is stripped. Returns (mode, addr, port); mode is one of
+    "unicast", "multicast", "placeholder" (c=0.0.0.0) or None if unusable."""
+    port = addr = None
+    for line in text.splitlines():
+        line = line.strip()
+        if port is None and line.startswith("m=video"):
+            fields = line.split()
+            if len(fields) > 1 and fields[1].split("/")[0].isdigit():
+                port = int(fields[1].split("/")[0])
+        elif addr is None and line.startswith("c=IN IP4 "):
+            addr = line[len("c=IN IP4 "):].split("/")[0].strip()
+    try:
+        ip = ipaddress.IPv4Address(addr)
+    except ValueError:
+        return None, addr, port
+    if port is None:
+        return None, addr, port
+    if str(ip) == "0.0.0.0":
+        return "placeholder", addr, port
+    return ("multicast" if ip.is_multicast else "unicast"), addr, port
+
+
+def local_ipv4s():
+    """This host's IPv4 addresses, or None if they can't be read."""
+    try:
+        out = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show"],
+            capture_output=True, text=True, timeout=3, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {f.split("/")[0] for line in out.splitlines() for f in line.split() if "." in f}
+
+
+def describe_source(sdp_text):
+    """(label, warning) for the status panel."""
+    mode, addr, port = parse_sdp(sdp_text)
+    if mode is None:
+        return "unreadable SDP", "no usable c= address / m=video port"
+    if mode == "placeholder":
+        return "placeholder (no source configured)", None
+    label = f"{mode} {addr}:{port}"
+    if mode == "unicast":
+        local = local_ipv4s()
+        if local is not None and addr not in local:
+            return label, (
+                f"{addr} is not an address on this server, so nothing will arrive. "
+                "Point the sender's destination here."
+            )
+    return label, None
+
+
 def get_status():
     status = {
         "mediamtx": "unreachable",
@@ -374,6 +437,8 @@ def get_status():
         "readers": 0,
         "bytes": 0,
         "sdp_updated": "no file",
+        "source": "no file",
+        "source_warning": None,
     }
     try:
         r = requests.get(f"{MEDIAMTX_API}/v3/paths/get/{MEDIAMTX_PATH}", timeout=2)
@@ -392,6 +457,9 @@ def get_status():
         mtime = os.path.getmtime(SDP_PATH)
         status["sdp_updated"] = datetime.datetime.fromtimestamp(mtime).strftime(
             "%Y-%m-%d %H:%M:%S"
+        )
+        status["source"], status["source_warning"] = describe_source(
+            pathlib.Path(SDP_PATH).read_text()
         )
     except FileNotFoundError:
         pass
@@ -444,7 +512,7 @@ def save():
     new_sdp = request.form.get("sdp", "").replace("\r\n", "\n").replace("\r", "\n")
     new_sdp = new_sdp.strip() + "\n"
 
-    if not new_sdp.startswith("v=") or "m=video" not in new_sdp:
+    if not new_sdp.startswith("v=") or parse_sdp(new_sdp)[0] is None:
         return redirect("/?saved=error")
 
     if os.path.exists(SDP_PATH):

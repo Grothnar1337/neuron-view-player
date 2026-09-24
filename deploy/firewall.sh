@@ -11,6 +11,11 @@
 # RTSP (8554) and the MediaMTX API (9997) are bound to loopback in
 # mediamtx.yml and deliberately have no rule here.
 #
+# Optional, and NOT SDP-aware: the ingest port is read once, when this runs, so
+# re-run it if a pasted SDP changes the port. It does not allow IGMP, which a
+# multicast source needs under ufw. Skip the firewall (install.sh --no-firewall)
+# if the VM sits on a network that already restricts access.
+#
 # Usage:
 #   sudo ./firewall.sh [--sdp PATH] [--source-ip IP] [--viewer-cidr CIDR]
 #                      [--mgmt-cidr CIDR] [--admin-port N] [--no-hls]

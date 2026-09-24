@@ -139,8 +139,16 @@ fi
 # Skipped for the placeholder: its c= is 0.0.0.0 on purpose, so FFmpeg binds
 # INADDR_ANY and waits quietly instead of crash-looping on a failed bind.
 if [[ $PLACEHOLDER_ACTIVE -eq 0 ]]; then
-  SDP_C=$(awk -F'IN IP4 ' '/^c=/ {print $2; exit}' "$STREAM_DIR/unicats.sdp" | tr -d '\r')
-  if [[ -n "$SDP_C" ]] && ! ip -4 addr show | grep -qw "$SDP_C"; then
+  # Strip the /32 (or /TTL) suffix Neuron View appends, or nothing would match.
+  SDP_C=$(awk -F'IN IP4 ' '/^c=/ {print $2; exit}' "$STREAM_DIR/unicats.sdp" | tr -d '\r' | cut -d/ -f1)
+  first_octet=${SDP_C%%.*}
+  if [[ "$first_octet" =~ ^[0-9]+$ ]] && (( first_octet >= 224 && first_octet <= 239 )); then
+    # Multicast: the group is never a local address, so there is nothing to
+    # compare. FFmpeg joins it on the default-route interface.
+    echo "    SDP is multicast, group $SDP_C — joined on the default-route NIC."
+    echo "    The network needs IGMP snooping with a querier, or the switch will"
+    echo "    not forward the group to this VM."
+  elif [[ -n "$SDP_C" ]] && ! ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1 | grep -qxF "$SDP_C"; then
     echo "    WARNING: the SDP's c= address is $SDP_C, which is not an address on"
     echo "             this VM. The pipeline will sit at 0 fps silently. Fix the"
     echo "             c= line and repoint the sender at this VM."

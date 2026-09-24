@@ -1,9 +1,10 @@
 ###############################################################################
 # MediaMTX configuration — neuron-view-player
 #
-# Takes the unicast RTP/UDP stream described by /config/unicats.sdp, transcodes
-# it 4:4:4 -> 4:2:0 with FFmpeg, republishes it to the local RTSP server, and
-# serves it as WebRTC at http://<vm-ip>:8889/live
+# Takes the unicast or multicast RTP/UDP stream described by /config/unicats.sdp
+# (the SDP's c= line decides which — FFmpeg joins the group if it is multicast),
+# transcodes it 4:4:4 -> 4:2:0 with FFmpeg, republishes it to the local RTSP
+# server, and serves it as WebRTC at http://<vm-ip>:8889/live
 #
 # Only keys that differ from the MediaMTX defaults are set here; everything
 # else is left alone deliberately.
@@ -107,7 +108,7 @@ paths:
     #       losing thousands more and starting the cycle again. That produced
     #       bursts of 3000-7000 lost packets rather than the steady trickle of
     #       genuine wire loss. 500 is FFmpeg's own default; this is a LAN
-    #       unicast feed, so real reordering is rare and a deep queue buys
+    #       feed (unicast or multicast), so real reordering is rare and a deep queue buys
     #       nothing. Do not raise this to "absorb loss" — it causes it.
     #
     #   -thread_queue_size 4096  : lets the demuxer keep draining the socket

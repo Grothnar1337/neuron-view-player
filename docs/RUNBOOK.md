@@ -62,13 +62,35 @@ the FFmpeg line to `-c:v copy`, it will publish happily and show black. Check
 
 Nothing is arriving from the source. In order:
 
+`check.sh` prints a **Source** section saying whether the SDP is unicast or a
+multicast group. Follow the matching list.
+
+**Unicast**
+
 1. Is the sender pointed at **this** VM's IP?
 2. Does the SDP's `c=` line hold this VM's address? If it does not, FFmpeg
    binds somewhere useless and sits at 0 fps *silently* — no error.
-3. Is something else holding the RTP port? It is **unicast**, so only one
-   receiver can bind it. VLC and FFmpeg will fight over it. `sudo ss -lnup |
-   grep <port>`.
-4. Firewall: `sudo ufw status | grep <port>`.
+3. Is something else holding the RTP port? Only one receiver can bind a unicast
+   port. VLC and FFmpeg will fight over it. `sudo ss -lnup | grep <port>`.
+4. Firewall, if you run one: `sudo ufw status | grep <port>`.
+
+**Multicast** (`c=` is 224.0.0.0–239.255.255.255)
+
+1. Is the sender actually transmitting to that group and port?
+2. Did FFmpeg join? `ip maddr show` should list the group. If it does not, the
+   pipeline is not running or the SDP is not what you think.
+3. Right NIC? FFmpeg joins on the **default-route** interface. On a host with
+   more than one NIC, the group may be on a network the default route does not
+   use. Watch it arrive: `sudo tcpdump -ni <nic> host <group>`.
+4. The switch needs **IGMP snooping with a querier**. Without a querier the
+   stream may arrive for a minute or two and then stop when the switch ages the
+   membership out — a classic "works, then dies" symptom.
+5. `sysctl net.ipv4.conf.all.rp_filter` should be `2` (set by
+   `99-stream.conf`). Strict `1` drops multicast from another subnet.
+6. If the SDP has `a=source-filter: incl … <source>`, FFmpeg does a
+   source-specific (SSM) join, which needs IGMPv3 on the network.
+7. Firewall, if you run one: it must allow IGMP and the UDP port. `firewall.sh`
+   only handles the port, and only as read at install time.
 
 ### Pipeline stalls immediately, no frames ever
 
@@ -211,10 +233,11 @@ sudo systemctl restart stream-admin
 ## Moving to a different VM
 
 1. Run `deploy/install.sh` on the new VM with the real SDP.
-2. Edit the SDP's `c=` line to the **new** VM's address.
-3. Repoint the sender's destination IP at the new VM.
-4. Stop the old VM's receiver before starting the new one — unicast, one
-   binder only.
+2. Unicast only: edit the SDP's `c=` line to the **new** VM's address (a
+   multicast SDP is unchanged — the group is the same wherever it is received).
+3. Unicast only: repoint the sender's destination IP at the new VM.
+4. Unicast only: stop the old VM's receiver before starting the new one — one
+   binder only. Multicast has no such limit; both can receive at once.
 5. `./deploy/check.sh`, then load the player in a normal browser before
    pointing the embedded one at it.
 
@@ -231,7 +254,7 @@ sudo systemctl restart stream-admin
   firewall's job.
 - The admin panel has no CSRF protection or rate limiting. Internal network
   only; put it behind a VPN if that stops being true.
-- Single VM, single unicast source. No redundancy — deliberately out of scope
+- Single VM, single source (unicast or multicast). No redundancy — deliberately out of scope
   for the first pass.
 - Not yet decided: whether to permanently lock the RTP ingest port to the
   source IP (`firewall.sh --source-ip` does it when you are ready).

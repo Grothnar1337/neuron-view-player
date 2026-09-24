@@ -1,6 +1,6 @@
 # neuron-view-player
 
-Serves a unicast RTP/UDP stream (described by an `.sdp` file) as WebRTC on a
+Serves a unicast or multicast RTP/UDP stream (described by an `.sdp` file) as WebRTC on a
 plain `http://` URL, so a third-party product's embedded browser can be pointed
 straight at it and just show the video. No iframe, no custom player page, no
 credentials at the viewer.
@@ -23,9 +23,13 @@ Viewers open `http://<vm-ip>:8889/live` — MediaMTX's own bare player page.
    fine and shows black. This cannot be fixed at the source.
 2. **The SDP has two `m=video` sections** and only the first carries data.
    Without `-map 0:v:0` FFmpeg waits forever on the dead one.
-3. **It's unicast.** Only one process can bind the RTP port, and the SDP's
-   `c=` line must be the receiving VM's own address — get it wrong and the
-   pipeline sits at 0 fps with no error at all.
+3. **The SDP's `c=` line decides unicast vs multicast, and nothing else needs
+   configuring.** For **unicast** it must be the receiving VM's own address (get
+   it wrong and the pipeline sits at 0 fps with no error at all) and only one
+   process can bind the port. For **multicast** it is the group (224.0.0.0/4);
+   FFmpeg joins it on the default-route NIC, several receivers can coexist, and
+   the network needs IGMP snooping with a querier. Paste the SDP into the admin
+   panel and that is the whole change — see [the SDP](#the-sdp).
 
 Full background in [docs/HANDOVER.md](docs/HANDOVER.md).
 
@@ -108,14 +112,30 @@ Some Neuron View configurations emit **two `m=video` sections** with only the
 first carrying data; others emit one. `-map 0:v:0` in `mediamtx.yml` handles
 both and must stay.
 
-> **Known rough edge.** `install.sh`'s `c=` sanity check compares the address
-> with its `/32` prefix still attached against `ip addr` output, which shows
-> the interface's own prefix (`/24` or whatever). So a perfectly correct
-> Neuron View SDP makes it print `WARNING: the SDP's c= address … is not an
-> address on this VM`. The warning is cosmetic — nothing else reads that value
-> and the install proceeds — but it is wrong and will mislead. The fix is one
-> `cut -d/ -f1` on that line; left alone deliberately rather than changing
-> deploy code during a docs update.
+A **multicast** SDP looks the same except `c=` holds a group and `source-filter`
+names the sender:
+
+```
+c=IN IP4 239.10.1.5/32
+a=source-filter: incl IN IP4 239.10.1.5 10.0.0.9
+```
+
+`install.sh`, `check.sh` and the admin panel all read `c=` with the `/32` (or
+`/TTL`) suffix stripped and work out unicast vs multicast from it. `check.sh`
+prints a **Source** section, and for multicast confirms the group appears in
+`ip maddr`. A `source-filter` makes FFmpeg do a source-specific join, which
+needs IGMPv3 on the network. `deploy/99-stream.conf` sets `rp_filter` to loose
+so multicast from another subnet isn't dropped.
+
+**Multi-NIC hosts:** FFmpeg joins the group on the default-route interface. If
+the multicast network isn't the default route, add a route for the group
+(`ip route add 239.10.1.0/24 dev <nic>`); there is deliberately no per-stream
+NIC setting, so the SDP stays the only thing that changes.
+
+**Firewall:** `deploy/firewall.sh` is optional and is **not** SDP-aware — it
+opens the ingest port as read at install time, and does not allow IGMP. If you
+run ufw, re-run it when the port changes and allow IGMP yourself for multicast.
+Running without a firewall (`install.sh --no-firewall`) avoids all of this.
 
 `install.sh` refuses to start without it, on purpose: Docker would create a
 *directory* at the bind-mount path and the failure would look like an FFmpeg

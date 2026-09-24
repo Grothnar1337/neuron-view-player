@@ -52,6 +52,14 @@ else:
 PY
 }
 
+# What the SDP asks for: unicast, or a multicast group (224.0.0.0/4). The
+# /32 (or /TTL) suffix Neuron View appends is stripped.
+SRC_ADDR=$(awk -F'IN IP4 ' '/^c=/ {print $2; exit}' "$SDP_FILE" 2>/dev/null | tr -d '\r' | cut -d/ -f1)
+SRC_PORT=$(awk '/^m=video/ {print $2; exit}' "$SDP_FILE" 2>/dev/null | tr -d '\r')
+SRC_MODE=unicast
+_o=${SRC_ADDR%%.*}
+if [[ "$_o" =~ ^[0-9]+$ ]] && (( _o >= 224 && _o <= 239 )); then SRC_MODE=multicast; fi
+
 if [[ $PLACEHOLDER -eq 1 ]]; then
   echo
   printf '\033[36mPlaceholder SDP in use\033[0m — %s has c=0.0.0.0, so no\n' "$SDP_FILE"
@@ -76,6 +84,26 @@ if docker top mediamtx 2>/dev/null | grep -q '[f]fmpeg'; then
   pass "ffmpeg transcode is running"
 else
   nosource "no ffmpeg process in the container — check: docker logs --tail 50 mediamtx"
+fi
+
+echo
+echo "Source"
+if [[ $PLACEHOLDER -eq 1 ]]; then
+  wait_ "placeholder — no source configured yet"
+elif [[ $SRC_MODE == multicast ]]; then
+  pass "multicast group $SRC_ADDR port ${SRC_PORT:-?}"
+  # The join is the thing that most often goes wrong, and it is visible on the
+  # host: if the group is not listed, FFmpeg never joined it.
+  if ip maddr show 2>/dev/null | grep -qw "$SRC_ADDR"; then
+    pass "group $SRC_ADDR is joined (see 'ip maddr show' for the NIC)"
+  else
+    nosource "group $SRC_ADDR is not in 'ip maddr' — FFmpeg has not joined it"
+  fi
+else
+  pass "unicast to ${SRC_ADDR:-?} port ${SRC_PORT:-?}"
+  if [[ -n "$SRC_ADDR" ]] && ! ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1 | grep -qxF "$SRC_ADDR"; then
+    fail "c= address $SRC_ADDR is not an address on this host — nothing will arrive"
+  fi
 fi
 
 echo
@@ -105,9 +133,17 @@ else
   elif [[ $PLACEHOLDER -eq 1 ]]; then
     wait_ "no data, as expected — the placeholder SDP points at no source"
   else
-    fail "bytesReceived is not increasing (${B1:-?} -> ${B2:-?}). The source is
+    if [[ $SRC_MODE == multicast ]]; then
+      fail "bytesReceived is not increasing (${B1:-?} -> ${B2:-?}). The multicast
+        group $SRC_ADDR is not arriving: is the sender transmitting to it, does
+        the switch have IGMP snooping + a querier, is the group in 'ip maddr'
+        on the right NIC (multi-NIC hosts join on the default route), and is
+        rp_filter loose (sysctl net.ipv4.conf.all.rp_filter = 2)?"
+    else
+      fail "bytesReceived is not increasing (${B1:-?} -> ${B2:-?}). The source is
         not arriving: check the sender's destination IP, the SDP's c= line,
-        and that nothing else has the RTP port bound (it is unicast)."
+        and that nothing else has the RTP port bound (unicast: one receiver only)."
+    fi
   fi
   echo "        viewers connected: ${READERS:-0}"
 fi

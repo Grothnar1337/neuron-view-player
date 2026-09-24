@@ -105,6 +105,30 @@ loc = c.post(
 check("SDP with no m=video rejected", "saved=error" in loc)
 check("that left the file alone too", pathlib.Path(sdp).read_text() == before)
 
+print("\nUnicast and multicast SDPs")
+P = adminapp.parse_sdp
+base = "v=0\no=- 0 0 IN IP4 10.0.0.9\ns=x\nt=0 0\n"
+check("unicast, media-level c= with /32", P(base + "m=video 5100 RTP/AVP 98\nc=IN IP4 10.0.0.50/32\n") == ("unicast", "10.0.0.50", 5100))
+check("unicast, session-level c=", P(base + "c=IN IP4 10.0.0.50\nm=video 5004 RTP/AVP 96\n") == ("unicast", "10.0.0.50", 5004))
+check("multicast, /TTL suffix", P(base + "m=video 5004 RTP/AVP 96\nc=IN IP4 239.10.1.5/32\n") == ("multicast", "239.10.1.5", 5004))
+check("multicast, /ttl/count form", P(base + "m=video 5004 RTP/AVP 96\nc=IN IP4 224.2.3.4/16/2\n")[0] == "multicast")
+check("0.0.0.0 is the placeholder", P(base + "m=video 5004 RTP/AVP 96\nc=IN IP4 0.0.0.0\n")[0] == "placeholder")
+check("no c= line -> unusable", P(base + "m=video 5004 RTP/AVP 96\n")[0] is None)
+check("IPv6 c= -> unusable", P(base + "m=video 5004 RTP/AVP 96\nc=IN IP6 ff02::1\n")[0] is None)
+check("non-numeric port -> unusable", P(base + "m=video abc RTP/AVP 96\nc=IN IP4 10.0.0.1\n")[0] is None)
+check("the shipped example parses", P((HERE.parent / "unicats.sdp.example").read_text())[0] == "unicast")
+
+mc = base + "m=video 5004 RTP/AVP 96\nc=IN IP4 239.10.1.5/32\na=rtpmap:96 H264/90000\n"
+loc = c.post("/save", data={"sdp": mc}, headers=auth()).headers.get("Location", "")
+check("multicast SDP is accepted", "saved=1" in loc or "norestart" in loc, loc)
+d = c.get("/api/status", headers=auth()).get_json()
+check("status reports multicast + group + port", d["source"] == "multicast 239.10.1.5:5004", d["source"])
+check("multicast never triggers the local-address warning", d["source_warning"] is None)
+before = pathlib.Path(sdp).read_text()
+loc = c.post("/save", data={"sdp": base + "m=video 5004 RTP/AVP 96\n"}, headers=auth()).headers.get("Location", "")
+check("SDP with no c= rejected", "saved=error" in loc)
+check("that left the file alone", pathlib.Path(sdp).read_text() == before)
+
 print("\nBind-mount requirement")
 ino = os.stat(sdp).st_ino
 c.post("/save", data={"sdp": new.replace("6000", "6002")}, headers=auth())

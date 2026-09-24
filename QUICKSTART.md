@@ -1,6 +1,6 @@
 # Quick start — Neuron View stream player
 
-Takes the unicast RTP stream from Neuron View and serves it as a plain web
+Takes the RTP stream from Neuron View (unicast or multicast) and serves it as a plain web
 page, so any browser — including the embedded one in the target product — can
 be pointed at a URL and just show the video.
 
@@ -20,12 +20,18 @@ embedded browser use it.
 
 ## 1. Point Neuron View at the server
 
-In Neuron View, set the unicast stream destination to **`10.144.40.160`**.
+Either:
 
-> **Only one receiver at a time.** This is a unicast stream, so exactly one
-> program can listen on the destination port. If someone has VLC or ffmpeg
-> open against it, they will fight the server for the port and nobody gets a
-> picture. Close anything else before expecting this to work.
+- **Unicast:** set the stream destination to **`10.144.40.160`**, or
+- **Multicast:** set the destination to your multicast group (e.g. `239.x.x.x`).
+  The server doesn't need to be told; it reads the group from the SDP.
+
+That's the only difference. Load the SDP in step 2 either way.
+
+> **Unicast: only one receiver at a time.** Exactly one program can listen on a
+> unicast destination port. If someone has VLC or ffmpeg open against it, they
+> will fight the server for the port and nobody gets a picture. Close anything
+> else before expecting this to work. Multicast doesn't have this limit.
 
 ## 2. Load the SDP
 
@@ -43,21 +49,25 @@ a disaster.
 
 > ### Worth one glance: the `c=` line
 >
-> Neuron View writes the *destination* into `c=`, so as long as the stream's
-> destination is set to this server, it comes out correct on its own:
+> Neuron View writes the *destination* into `c=`. The admin panel's **Source**
+> row shows what it read from it:
 >
 > ```
-> c=IN IP4 10.144.40.160/32
+> unicast 10.144.40.160:5100     <- c=IN IP4 10.144.40.160/32
+> multicast 239.10.1.5:5004      <- c=IN IP4 239.10.1.5/32
 > ```
 >
-> If it shows any other address, the destination is wrong **in Neuron View** —
-> fix it there and copy the SDP again. Don't hand-edit this line: that would
-> paper over a sender still pointed somewhere else, and no video would arrive
-> regardless.
+> **Unicast:** if the address isn't this server's, the panel shows it in red.
+> The destination is wrong **in Neuron View** — fix it there and copy the SDP
+> again. Don't hand-edit this line: that would paper over a sender still
+> pointed somewhere else, and no video would arrive regardless.
 >
-> Worth checking because it fails **silently**. The panel just sits at "not
-> publishing" with zero bytes, looking exactly like a stream that never
-> arrived.
+> **Multicast:** the group is whatever the sender uses; there's nothing to
+> match against this server.
+>
+> Worth checking because a wrong unicast address fails **silently**. The panel
+> just sits at "not publishing" with zero bytes, looking exactly like a stream
+> that never arrived.
 
 ## 3. Check it's working
 
@@ -99,7 +109,8 @@ several seconds behind.
 |---|---|
 | Page loads, video is black | The stream's codec settings changed at source. Escalate. |
 | "not publishing", bytes at 0 | Neuron View isn't sending here — check its destination, then re-copy the SDP |
-| Bytes stuck at a non-zero number | Neuron View stopped sending, or something else grabbed the port |
+| Bytes stuck at a non-zero number | Neuron View stopped sending, or (unicast) something else grabbed the port |
+| Multicast: worked, then stopped after a minute or two | Network's IGMP snooping has no querier — escalate |
 | Was working, now nothing | Check nobody opened VLC against the stream |
 | Picture tears or breaks up | Note the time and escalate — don't change settings |
 | Nothing loads at all | Server may be down — escalate |
